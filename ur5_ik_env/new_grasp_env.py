@@ -21,7 +21,8 @@ class UR5IKEnv:
             env_cfg,
             reward_cfg,
             robot_cfg,
-            show_viewer=False,
+            command_cfg,
+            show_viewer=True,
     ):
         
         # == Initialise learning environment  ==
@@ -37,6 +38,7 @@ class UR5IKEnv:
         # configs
         self.env_cfg = env_cfg
         self.reward_scales = reward_cfg
+        self.command_cfg = command_cfg
         self.action_scales = torch.tensor(env_cfg["action_scales"], device=self.device)
 
         # == setup scene ==
@@ -44,11 +46,13 @@ class UR5IKEnv:
             sim_options=gs.options.SimOptions(dt=self.ctrl_dt, substeps=2),
             viewer_options=gs.options.ViewerOptions(
                 max_FPS=int(0.5 / self.ctrl_dt),
-                camera_pos=(2.0, 0.0, 2.5),
+                camera_pos=(0.0, 0.0, 0.5),
                 camera_lookat=(0.0, 0.0, 0.5),
                 camera_fov=40,
             ),
-            vis_options=gs.options.VisOptions(rendered_envs_idx=list(range(10))),
+            vis_options=gs.options.VisOptions(
+                rendered_envs_idx=list(range(num_envs)),
+                show_world_frame=True),
             rigid_options=gs.options.RigidOptions(
                 dt=self.ctrl_dt,
                 constraint_solver=gs.constraint_solver.Newton,
@@ -74,7 +78,7 @@ class UR5IKEnv:
         self.target = self.scene.add_entity(
             morph=gs.morphs.Mesh(
                 file="meshes/sphere.obj",
-                scale=0.05,
+                scale=0.02,
                 fixed=False,
                 collision=False,
             ),
@@ -96,7 +100,7 @@ class UR5IKEnv:
             )
 
          # == further setup ==  
-        self.scene.build(n_envs=num_envs, env_spacing=(1.0, 1.0))
+        self.scene.build(n_envs=num_envs, env_spacing=(2.0, 2.0))
         # set pd gains (must be called after scene.build)
         self.robot.set_pd_gains()
 
@@ -111,7 +115,7 @@ class UR5IKEnv:
         self.episode_length_buf = torch.zeros((self.num_envs,), device=gs.device, dtype=gs.tc_int)
         self.reward_buf = torch.zeros((self.num_envs,), device=gs.device, dtype=gs.tc_float)
         self.reset_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=gs.device)
-        self.goal_pos = torch.zeros(self.num_envs, 7, device=gs.device)
+        self.goal_pos = torch.zeros(self.num_envs, 3,device=gs.device)
 
         self.actions = torch.zeros(self.num_envs, self.num_actions, device=gs.device)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, device=gs.device)
@@ -123,8 +127,7 @@ class UR5IKEnv:
         self.goal_pos[envs_idx, 0] = gs_rand_float(*self.command_cfg["pos_x_range"], (len(envs_idx),), gs.device)
         self.goal_pos[envs_idx, 1] = gs_rand_float(*self.command_cfg["pos_y_range"], (len(envs_idx),), gs.device)
         self.goal_pos[envs_idx, 2] = gs_rand_float(*self.command_cfg["pos_z_range"], (len(envs_idx),), gs.device)
-
-        self.target.set_pos(self.goal_pos, envs_idx=envs_idx)
+        self.target.set_pos(self.goal_pos, zero_velocity=True)
 
     
     def reset_idx(self, envs_idx):
@@ -134,7 +137,7 @@ class UR5IKEnv:
 
          # reset robot
         self.robot.reset(envs_idx)
-
+        self.resample_target(envs_idx)
          # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
@@ -196,7 +199,9 @@ class UR5IKEnv:
 
 
     def rescale_action(self, action: torch.Tensor) -> torch.Tensor:
-        rescaled_action = action * self.action_scales
+        shifted_action = action - 0.5  # shift to [-0.5, 0.5]
+        rescaled_action = shifted_action * self.action_scales
+        self.actions = rescaled_action
         return rescaled_action
     
     def is_episode_complete(self):
@@ -221,13 +226,7 @@ class UR5IKEnv:
         world = torch.zeros_like(keypoints_offset)
         for k in range(keypoints_offset.shape[1]):
             world[:, k] = position + transform_by_quat(keypoints_offset[:, k], quaternion)
-        return world
-    
-
-    def rescale_action(self, action: torch.Tensor) -> torch.Tensor:
-        rescaled_action = action * self.action_scales
-        return rescaled_action
-    
+        return world   
 
     def _reward_distance(self):
         ee_pos = self.robot.get_ee_pos()  # [B, 3]
@@ -248,7 +247,7 @@ class Manipulator:
         # == Genesis configurations ==
         material: gs.materials.Rigid = gs.materials.Rigid()
         morph: gs.morphs.MJCF = gs.morphs.MJCF(
-            file="mjcf/universal_robots_ur5e/ur5e.xml",
+            file="assets/universal_robots_ur5e/ur5e.xml",
             pos=(0.0, 0.0, 0.0),
             quat=(1.0, 0.0, 0.0, 0.0),
         )
@@ -296,7 +295,7 @@ class Manipulator:
         self._robot_entity.set_qpos(default_joint_angles, envs_idx=envs_idx)
 
     def apply_action(self, action: torch.Tensor) -> None:
-       
+        
         self._robot_entity.control_dofs_position(position=action)
 
     def base_pos(self):

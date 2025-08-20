@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import pickle
 import shutil
@@ -33,7 +34,7 @@ def get_train_cfg(exp_name, max_iterations):
             "entropy_coef": 0.00,
             "gamma": 0.99,
             "lam": 0.95,
-            "learning_rate": 0.0003,
+            "learning_rate": 0.003,
             "max_grad_norm": 1.0,
             "num_learning_epochs": 5,
             "num_mini_batches": 4,
@@ -72,9 +73,9 @@ def get_train_cfg(exp_name, max_iterations):
 
 def get_cfgs():
     env_cfg = {
-        "num_obs": 14,
+        "num_obs": 15,
         "num_actions": 6,
-        "action_scales": [0.05, 0.05, 0.05, 0.05, 0.05, 0.05],
+        "action_scales": [1*math.pi, 1*math.pi, 1*math.pi, 1*math.pi, 1*math.pi, 1*math.pi],
         "episode_length_s": 3.0,
         "ctrl_dt": 0.01,
         "box_size": [0.04, 0.04, 0.06],
@@ -83,7 +84,7 @@ def get_cfgs():
         "visualize_camera": False,
     }
     reward_scales = {
-        "distance": 1.0,
+        "distance":1.0,
     }
     # UR5e robot specific
     #TODO: Change all of this
@@ -92,21 +93,27 @@ def get_cfgs():
         "default_arm_dof": [0.0, -3.14/2, 3.14/2, 0.0,0.0, 0.0],
         "ik_method": "dls_ik",
     }
-    return env_cfg, reward_scales, robot_cfg
+    command_cfg = {
+        "num_commands": 3,
+        "pos_x_range": [0.2, 0.8],
+        "pos_y_range": [-0.3, 0.3],
+        "pos_z_range": [0.2, 0.5],
+    }
+    return env_cfg, reward_scales, robot_cfg, command_cfg
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--exp_name", type=str, default="grasp")
-    parser.add_argument("-v", "--vis", action="store_true", default=True)
-    parser.add_argument("-B", "--num_envs", type=int, default=10000)
-    parser.add_argument("--max_iterations", type=int, default=1000)
+    parser.add_argument("-v", "--vis", action="store_true", default=False)
+    parser.add_argument("-B", "--num_envs", type=int, default=1000)
+    parser.add_argument("--max_iterations", type=int, default=100)
     args = parser.parse_args()
 
     gs.init(logging_level="warning", precision="32")
 
     log_dir = f"logs/{args.exp_name}/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    env_cfg, reward_scales, robot_cfg = get_cfgs()
+    env_cfg, reward_scales, robot_cfg, command_cfg = get_cfgs()
     train_cfg = get_train_cfg(args.exp_name, args.max_iterations)
 
     if os.path.exists(log_dir):
@@ -123,6 +130,7 @@ def main():
         env_cfg=env_cfg,
         reward_cfg=reward_scales,
         robot_cfg=robot_cfg,
+        command_cfg=command_cfg,
         show_viewer=args.vis,
     )
 
